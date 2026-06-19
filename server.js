@@ -1,7 +1,7 @@
 const http = require('http');
 const zlib = require('zlib');
 
-const LOGIN = 'lizagrishuk'; // замени на свой логин в системе
+const LOGIN = 'lizagrishuk';
 
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/login') {
