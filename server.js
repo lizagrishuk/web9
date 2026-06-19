@@ -1,53 +1,89 @@
-const http = require('http');
-const zlib = require('zlib');
+import express from "express";
+import cors from "cors";
+import busboy from "busboy";
+import zlib from "zlib";
+import { promisify } from "util";
 
-const LOGIN = 'lizagrishuk';
+const app = express();
+const gzipAsync = promisify(zlib.gzip);
 
-const server = http.createServer((req, res) => {
-  if (req.method === 'GET' && req.url === '/login') {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end(LOGIN);
-    return;
-  }
+app.use(cors());
 
-  if (req.method === 'POST' && req.url === '/zipper') {
-    const chunks = [];
-    req.on('data', chunk => chunks.push(chunk));
-    req.on('end', () => {
-      const body = Buffer.concat(chunks);
-
-      // ищем файл в multipart/form-data
-      const boundary = req.headers['content-type'].split('boundary=')[1];
-      const boundaryBuf = Buffer.from('--' + boundary);
-
-      // находим начало и конец данных файла
-      const bodyStr = body.toString('binary');
-      const headerEnd = bodyStr.indexOf('\r\n\r\n') + 4;
-      const fileStart = headerEnd;
-      const fileEnd = body.length - boundaryBuf.length - 8; // --boundary--\r\n
-
-      const fileData = body.slice(fileStart, fileEnd);
-
-      zlib.gzip(fileData, (err, compressed) => {
-        if (err) {
-          res.writeHead(500);
-          res.end('gzip error');
-          return;
-        }
-        res.writeHead(200, {
-          'Content-Type': 'application/gzip',
-          'Content-Disposition': 'attachment; filename="result.gz"',
-          'Content-Length': compressed.length
-        });
-        res.end(compressed);
-      });
-    });
-    return;
-  }
-
-  res.writeHead(404);
-  res.end('Not found');
+app.get("/login", (req, res) => {
+  res.type("text/plain");
+  res.send("lizagrishuk");
 });
 
+// ВАЖНО: /zipper стоит ДО express.json/urlencoded
+app.post("/zipper", (req, res) => {
+  const contentType = req.headers["content-type"] || "";
+
+  if (contentType.includes("multipart/form-data")) {
+    let fileBuffer = null;
+
+    const bb = busboy({ headers: req.headers });
+
+    bb.on("file", (_name, file, _info) => {
+      const chunks = [];
+
+      file.on("data", (chunk) => {
+        chunks.push(chunk);
+      });
+
+      file.on("end", () => {
+        fileBuffer = Buffer.concat(chunks);
+      });
+    });
+
+    bb.on("field", (_name, val) => {
+      if (fileBuffer === null) {
+        fileBuffer = Buffer.from(val);
+      }
+    });
+
+    bb.on("finish", async () => {
+      try {
+        const data = fileBuffer || Buffer.from("");
+        const compressed = await gzipAsync(data);
+
+        res.setHeader("Content-Type", "application/gzip");
+        res.setHeader("Content-Disposition", "attachment; filename=result.gz");
+        res.end(compressed);
+      } catch (err) {
+        res.status(500).send("Compression error");
+      }
+    });
+
+    req.pipe(bb);
+    return;
+  }
+
+  const chunks = [];
+
+  req.on("data", (chunk) => {
+    chunks.push(chunk);
+  });
+
+  req.on("end", async () => {
+    try {
+      const data = Buffer.concat(chunks);
+      const compressed = await gzipAsync(data);
+
+      res.setHeader("Content-Type", "application/gzip");
+      res.setHeader("Content-Disposition", "attachment; filename=result.gz");
+      res.end(compressed);
+    } catch (err) {
+      res.status(500).send("Compression error");
+    }
+  });
+});
+
+// body-парсеры только ПОСЛЕ zipper
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`running on port ${PORT}`));
+
+app.listen(PORT, () => {
+  console.log(`Server started on port ${PORT}`);
+});
